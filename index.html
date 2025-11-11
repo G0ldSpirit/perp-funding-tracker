@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perp DEX Funding Rates Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-out;
+        }
+        .loading {
+            animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white min-h-screen">
+    <div class="max-w-7xl mx-auto p-6">
+        <!-- Header -->
+        <div class="mb-8">
+            <div class="flex items-center justify-between mb-4">
+                <h1 class="text-4xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                    Perp DEX Funding Rates
+                </h1>
+                <button onclick="refreshData()" class="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-colors disabled:opacity-50" id="refreshBtn">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Actualiser
+                </button>
+            </div>
+            <p class="text-slate-400">
+                Identifiez les opportunités d'arbitrage entre Paradex et Lighter
+            </p>
+            <p class="text-sm text-slate-500 mt-2" id="lastUpdate">
+                Chargement des données...
+            </p>
+            <div class="mt-2 flex items-center gap-4 flex-wrap">
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 bg-gray-500 rounded-full" id="apiStatusPDX"></div>
+                    <span class="text-xs text-slate-400" id="apiStatusTextPDX">Paradex...</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 bg-gray-500 rounded-full" id="apiStatusLTR"></div>
+                    <span class="text-xs text-slate-400" id="apiStatusTextLTR">Lighter...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info Box -->
+        <div class="bg-blue-900/30 border border-blue-700 rounded-lg p-4 mb-6 flex items-start gap-3">
+            <svg class="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div class="text-sm text-slate-300">
+                <p class="font-semibold mb-1">Comment arbitrer:</p>
+                <p>Lorsqu'un spread est important entre Paradex et Lighter, vous pouvez shorter sur la plateforme avec le taux le plus élevé (vous recevez des funding fees) et longer sur celle avec le taux le plus bas (vous payez moins de fees).</p>
+                <p class="mt-2 text-green-300">🟢 Données 100% en temps réel via backend Vercel</p>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex gap-4 mb-6 flex-wrap">
+            <div>
+                <label class="text-sm text-slate-400 mb-2 block">Trier par:</label>
+                <select id="sortBy" onchange="renderData()" class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                    <option value="spread">Spread (meilleur en premier)</option>
+                    <option value="token">Token (A-Z)</option>
+                </select>
+            </div>
+            <div>
+                <label class="text-sm text-slate-400 mb-2 block">Filtrer par token:</label>
+                <select id="filterToken" onchange="renderData()" class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                    <option value="all">Tous les tokens</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Data Container -->
+        <div id="dataContainer" class="space-y-4">
+            <div class="text-center py-12">
+                <div class="loading inline-block w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                <p class="text-slate-400 mt-4">Chargement des funding rates...</p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="mt-8 text-center text-sm text-slate-500">
+            <p>✅ Données en temps réel via backend Vercel Serverless</p>
+            <p class="mt-2">Actualisation automatique toutes les 60 secondes</p>
+        </div>
+    </div>
+
+    <script>
+        let fundingData = [];
+        const dexes = ['Paradex', 'Lighter'];
+        let isLoading = false;
+
+        // Fonction pour récupérer Paradex via backend
+        async function fetchParadexData() {
+            try {
+                console.log('Fetching Paradex via backend...');
+                updateApiStatus('PDX', 'loading', 'Chargement...');
+                
+                const response = await fetch('/api/paradex');
+                
+                if (!response.ok) {
+                    throw new Error(`Backend error: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                console.log('Paradex result:', result);
+                
+                if (result.success && result.data) {
+                    updateApiStatus('PDX', 'success', `${result.count} marchés`);
+                    return result.data;
+                } else {
+                    throw new Error(result.error || 'No data');
+                }
+            } catch (error) {
+                console.error('Paradex error:', error);
+                updateApiStatus('PDX', 'error', error.message);
+                return {};
+            }
+        }
+
+        // Fonction pour récupérer Lighter via backend
+        async function fetchLighterData() {
+            try {
+                console.log('Fetching Lighter via backend...');
+                updateApiStatus('LTR', 'loading', 'Chargement...');
+                
+                const response = await fetch('/api/lighter');
+                
+                if (!response.ok) {
+                    throw new Error(`Backend error: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                console.log('Lighter result:', result);
+                
+                if (result.success && result.data) {
+                    updateApiStatus('LTR', 'success', `${result.count} marchés`);
+                    return result.data;
+                } else {
+                    throw new Error(result.error || 'No data');
+                }
+            } catch (error) {
+                console.error('Lighter error:', error);
+                updateApiStatus('LTR', 'error', error.message);
+                return {};
+            }
+        }
+
+        function updateApiStatus(api, status, message) {
+            const statusId = `apiStatus${api}`;
+            const textId = `apiStatusText${api}`;
+            const statusDot = document.getElementById(statusId);
+            const statusText = document.getElementById(textId);
+            
+            if (statusDot && statusText) {
+                if (status === 'success') {
+                    statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
+                    statusText.textContent = message;
+                    statusText.className = 'text-xs text-green-400';
+                } else if (status === 'error') {
+                    statusDot.className = 'w-2 h-2 bg-red-500 rounded-full';
+                    statusText.textContent = message;
+                    statusText.className = 'text-xs text-red-400';
+                } else if (status === 'loading') {
+                    statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
+                    statusText.textContent = message;
+                    statusText.className = 'text-xs text-yellow-400';
+                }
+            }
+        }
+
+        async function generateRealData() {
+            const [pdxRates, ltrRates] = await Promise.all([
+                fetchParadexData(),
+                fetchLighterData()
+            ]);
+
+            const allTokens = [...new Set([...Object.keys(pdxRates), ...Object.keys(ltrRates)])];
+            const data = [];
+            
+            allTokens.forEach(token => {
+                const pdxRate = pdxRates[token];
+                const ltrRate = ltrRates[token];
+                
+                if (pdxRate === undefined && ltrRate === undefined) return;
+                
+                const rates = {
+                    'Paradex': pdxRate !== undefined ? (pdxRate * 100).toFixed(4) : 'N/A',
+                    'Lighter': ltrRate !== undefined ? (ltrRate * 100).toFixed(4) : 'N/A'
+                };
+                
+                if (pdxRate !== undefined && ltrRate !== undefined) {
+                    const pdxRatePercent = pdxRate * 100;
+                    const ltrRatePercent = ltrRate * 100;
+                    const spread = Math.abs(pdxRatePercent - ltrRatePercent).toFixed(3);
+                    
+                    const maxDex = pdxRatePercent > ltrRatePercent ? 'Paradex' : 'Lighter';
+                    const minDex = pdxRatePercent > ltrRatePercent ? 'Lighter' : 'Paradex';
+                    
+                    data.push({
+                        token,
+                        rates,
+                        spread: parseFloat(spread),
+                        maxDex,
+                        minDex,
+                        maxRate: Math.max(pdxRate, ltrRate),
+                        minRate: Math.min(pdxRate, ltrRate),
+                        hasBothRates: true
+                    });
+                } else {
+                    data.push({
+                        token,
+                        rates,
+                        spread: 0,
+                        maxDex: pdxRate !== undefined ? 'Paradex' : 'Lighter',
+                        minDex: null,
+                        maxRate: pdxRate || ltrRate,
+                        minRate: pdxRate || ltrRate,
+                        hasBothRates: false
+                    });
+                }
+            });
+            
+            return data;
+        }
+
+        function getSpreadColor(spread) {
+            if (spread > 0.15) return 'text-green-600 font-bold';
+            if (spread > 0.08) return 'text-yellow-600';
+            return 'text-gray-600';
+        }
+
+        function getFundingColor(rate) {
+            if (rate === 'N/A') return 'bg-gray-200 text-gray-600';
+            const rateNum = parseFloat(rate) / 100;
+            if (rateNum > 0.05) return 'bg-green-100 text-green-800';
+            if (rateNum > 0) return 'bg-green-50 text-green-700';
+            if (rateNum > -0.05) return 'bg-red-50 text-red-700';
+            return 'bg-red-100 text-red-800';
+        }
+
+        async function refreshData() {
+            if (isLoading) return;
+            
+            isLoading = true;
+            const refreshBtn = document.getElementById('refreshBtn');
+            refreshBtn.disabled = true;
+            
+            fundingData = await generateRealData();
+            
+            const now = new Date();
+            document.getElementById('lastUpdate').textContent = 
+                `Dernière mise à jour: ${now.toLocaleTimeString('fr-FR')}`;
+            
+            const filterSelect = document.getElementById('filterToken');
+            const currentValue = filterSelect.value;
+            filterSelect.innerHTML = '<option value="all">Tous les tokens</option>';
+            
+            const tokens = [...new Set(fundingData.map(d => d.token))].sort();
+            tokens.forEach(token => {
+                filterSelect.innerHTML += `<option value="${token}">${token}</option>`;
+            });
+            filterSelect.value = currentValue;
+            
+            renderData();
+            
+            refreshBtn.disabled = false;
+            isLoading = false;
+        }
+
+        function renderData() {
+            const sortBy = document.getElementById('sortBy').value;
+            const filterToken = document.getElementById('filterToken').value;
+            
+            let sortedData = [...fundingData];
+            if (sortBy === 'spread') {
+                sortedData.sort((a, b) => b.spread - a.spread);
+            } else {
+                sortedData.sort((a, b) => a.token.localeCompare(b.token));
+            }
+            
+            const filteredData = filterToken === 'all' 
+                ? sortedData 
+                : sortedData.filter(d => d.token === filterToken);
+            
+            const container = document.getElementById('dataContainer');
+            container.innerHTML = '';
+            
+            if (filteredData.length === 0) {
+                container.innerHTML = '<div class="text-center py-8 text-slate-400">Aucune donnée disponible</div>';
+                return;
+            }
+            
+            filteredData.forEach(item => {
+                const card = document.createElement('div');
+                card.className = 'bg-slate-800 rounded-lg border border-slate-700 overflow-hidden fade-in';
+                
+                const ratesHTML = Object.entries(item.rates).map(([dex, rate]) => {
+                    const isNA = rate === 'N/A';
+                    const rateNum = isNA ? 0 : parseFloat(rate);
+                    const arrow = isNA ? '' : rateNum > 0 
+                        ? '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>'
+                        : '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" /></svg>';
+                    
+                    return `
+                        <div class="p-3 rounded-lg ${getFundingColor(rate)} relative">
+                            ${!isNA ? '<div class="absolute top-1 right-1"><span class="text-xs bg-green-600 text-white px-1 rounded font-semibold">LIVE</span></div>' : ''}
+                            <div class="text-xs font-semibold mb-1">${dex}</div>
+                            <div class="flex items-center gap-1">
+                                ${arrow}
+                                <span class="font-bold">${isNA ? 'N/A' : rateNum.toFixed(3) + '%'}</span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+                const opportunityHTML = item.hasBothRates && item.spread > 0.05 ? `
+                    <div class="bg-green-900/20 border border-green-700 rounded-lg p-3 flex items-start gap-3 mt-4">
+                        <svg class="w-5 h-5 text-green-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div class="text-sm">
+                            <p class="font-semibold text-green-300 mb-1">🔥 Opportunité d'arbitrage!</p>
+                            <p class="text-slate-300">
+                                <span class="font-semibold text-red-400">Short ${item.maxDex}</span> (${(item.maxRate * 100).toFixed(3)}%) 
+                                <span class="font-semibold text-green-400">Long ${item.minDex}</span> (${(item.minRate * 100).toFixed(3)}%)
+                            </p>
+                            <p class="text-slate-400 mt-1">Profit: ~${item.spread}%</p>
+                        </div>
+                    </div>
+                ` : !item.hasBothRates ? `
+                    <div class="bg-yellow-900/20 border border-yellow-700 rounded-lg p-3 mt-4">
+                        <p class="text-sm text-yellow-300">⚠️ Uniquement sur ${item.maxDex}</p>
+                    </div>
+                ` : '';
+                
+                card.innerHTML = `
+                    <div class="p-4 bg-slate-750 flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center font-bold">
+                                ${item.token.slice(0, 2)}
+                            </div>
+                            <div>
+                                <h3 class="text-xl font-bold">${item.token}-PERP</h3>
+                                <p class="text-sm text-slate-400">Funding rate</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-sm text-slate-400 mb-1">Spread</div>
+                            <div class="text-2xl font-bold ${getSpreadColor(item.spread)}">
+                                ${item.hasBothRates ? item.spread + '%' : 'N/A'}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            ${ratesHTML}
+                        </div>
+                        ${opportunityHTML}
+                    </div>
+                `;
+                
+                container.appendChild(card);
+            });
+        }
+
+        // Initialize
+        refreshData();
+        
+        // Auto-refresh every 60 seconds
+        setInterval(refreshData, 60000);
+    </script>
+</body>
+</html>
